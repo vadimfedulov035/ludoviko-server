@@ -1,12 +1,15 @@
 #!/usr/bin/env python
 
-from pydantic import BaseModel
+
+import re
 
 import torch
 from fastapi import FastAPI, HTTPException
 from transformers import MllamaForConditionalGeneration, BitsAndBytesConfig, AutoTokenizer
+from pydantic import BaseModel
 
-from gen import generate_responses, generate_mean_rates
+from resp_gen import Responder
+from rate_gen import Rater
 
 
 MODEL = "./ludoviko"
@@ -14,15 +17,13 @@ MODEL = "./ludoviko"
 
 class UserData(BaseModel):
     user: str
-    user_prompt: str
+    dialog: str
     order: str
 
 
 class Settings(BaseModel):
     system_prompt: str
     think_prompts: list
-
-    rater_prompt: str
     rate_prompt: str
 
     temperature: float
@@ -32,9 +33,8 @@ class Settings(BaseModel):
 
     max_new_tokens: int
     dynamic_token_shift: int
-    thinking_tokens: int
-    rate_tokens: int
 
+    rate_tokens: int
     probe_num: int
 
 
@@ -60,13 +60,16 @@ async def chat(request: RequestBody):
     user_data = request.user_data
     settings = request.settings
 
-    responses = generate_responses(model, tokenizer, user_data, settings)
-    rates = generate_mean_rates(model, tokenizer, responses, settings)
+    responder = Responder(model, tokenizer, settings, user_data)
+    responses = responder.respond()
 
-    for i, (response, rate) in enumerate(zip(responses, rates)):
-        print(f"{i + 1} response ({rate:.2f}/10):\n{response}")
+    rater = Rater(model, tokenizer, settings, user_data, responses)
+    rates = rater.rate()
 
     best_idx = rates.index(max(rates))
     best_response = responses[best_idx]
+
+    for rate, response in zip(rates, responses):
+        print(f"Rate: {rate:.1f}/10\n{response}\n")
 
     return {"response": best_response}

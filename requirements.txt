@@ -3,3 +3,4 @@ fastapi
 transformers
 bitsandbytes
 peft
+numpy
