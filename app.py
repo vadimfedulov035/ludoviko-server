@@ -1,10 +1,7 @@
 #!/usr/bin/env python
 
-
-import re
-
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from transformers import MllamaForConditionalGeneration, BitsAndBytesConfig, AutoTokenizer
 from pydantic import BaseModel
 
@@ -13,12 +10,6 @@ from rate_gen import Rater
 
 
 MODEL = "./ludoviko"
-
-
-class UserData(BaseModel):
-    user: str
-    dialog: str
-    order: str
 
 
 class Settings(BaseModel):
@@ -33,13 +24,14 @@ class Settings(BaseModel):
 
     max_new_tokens: int
     dynamic_token_shift: int
-
     rate_tokens: int
-    probe_num: int
+
+    batch_size: int
+    rate_num: int
 
 
 class RequestBody(BaseModel):
-    user_data: UserData
+    dialog: list[str]
     settings: Settings
 
 
@@ -57,13 +49,13 @@ app = FastAPI()
 
 @app.post("/api/chat")
 async def chat(request: RequestBody):
-    user_data = request.user_data
+    dialog = request.dialog
     settings = request.settings
 
-    responder = Responder(model, tokenizer, settings, user_data)
+    responder = Responder(model, tokenizer, settings, dialog)
     responses = responder.respond()
 
-    rater = Rater(model, tokenizer, settings, user_data, responses)
+    rater = Rater(model, tokenizer, settings, dialog, responses)
     rates = rater.rate()
 
     best_idx = rates.index(max(rates))
