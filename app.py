@@ -5,11 +5,11 @@ from fastapi import FastAPI
 from transformers import MllamaForConditionalGeneration, BitsAndBytesConfig, AutoTokenizer
 from pydantic import BaseModel
 
-from resp_gen import Responder
-from rate_gen import Rater
+from responder import Responder
+from rater import Rater
 
 
-MODEL = "./ludoviko"
+MODEL = "./model"
 
 
 class Settings(BaseModel):
@@ -47,17 +47,31 @@ model = MllamaForConditionalGeneration.from_pretrained(
 app = FastAPI()
 
 
+llm = {
+    "model": model,
+    "tokenizer": tokenizer
+}
+
+
 @app.post("/api/chat")
 async def chat(request: RequestBody):
+
     dialog = request.dialog
     settings = request.settings
 
-    responder = Responder(model, tokenizer, settings, dialog)
+    # generate responses
+    responder = Responder(llm, settings, dialog, responses=None)
     responses = responder.respond()
 
-    rater = Rater(model, tokenizer, settings, dialog, responses)
+    # set token numbers to zero to enter rate mode
+    settings.max_new_tokens = 0
+    settings.dynamic_token_shift = 0
+
+    # rater responses
+    rater = Rater(llm, settings, dialog, responses)
     rates = rater.rate()
 
+    # find best response
     best_idx = rates.index(max(rates))
     best_response = responses[best_idx]
 

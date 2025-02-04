@@ -1,24 +1,36 @@
-#!/usr/bin/env python
+"""
+This module defines TextGenerator superclass for Responder and Rater classes.
+It sets token number based on passed settings.
+It defines self.generate() and self.check() methods for subclass use.
+"""
+
+
+from typing import Optional
 
 import re
 
 import torch
 
 
-class TextGenerator():
+
+class Generator():
+
+    """
+    Superclass for Responder and Rater classes.
+    self.generate(user_prompt: str) generates LLM response.
+    self.check(resp: str, msg: str) checks message (msg is for length check).
+    """
 
     SYSTEM_TEMPLATE = "<|start_header_id|>system<|end_header_id|>{}<|eot_id|>"
     USER_TEMPLATE = "<|start_header_id|>user<|end_header_id|>{}<|eot_id|>"
     ASSISTANT_TEMPLATE = "<|start_header_id|>assistant<|end_header_id|>"
 
-    def __init__(self, model, tokenizer, settings,
-                 dialog: list[str], rate_mode: bool):
+    def __init__(self, llm, settings, dialog: list[str], responses: Optional[list[str]]):
         """
-        Initializes token num based on settings and rate mode.
-        Sets -> dialog: list[str], dialog_str: str
+        Initializes token number based on settings.
+        Sets -> self.dialog: list[str], self.dialog_str: str
         """
-        self.model = model
-        self.tokenizer = tokenizer
+        self.model, self.tokenizer = llm.values()
         self.settings = settings
 
         self.dialog = dialog
@@ -27,30 +39,33 @@ class TextGenerator():
                 self.dialog[i] = re.sub("\n+", " ", msg)
         self.dialog_str = "\n".join(dialog)
 
-        # set token num based on the rate mode
-        if rate_mode:
-            self.settings.max_new_tokens = settings.rate_tokens
-        else:
-            self._set_token_num()
+        self.responses = responses
+
+        self._set_token_num()
 
 
     def _set_token_num(self):
         """
-        Sets static or dynamic token num,
-        Dynamic token num is modified based by its shift value.
+        Sets settings.max_new_tokens to static/dynamic/rate token number.
+        Static token number <- settings.max_new_tokens.
+        Dynamic token number <- length + settings.dynamic_token_shift.
+        Rate token number <- settings.rate_tokens if all is set to 0.
         """
         tokenizer = self.tokenizer
         settings = self.settings
         dialog = self.dialog
 
-        # set static limit if specified
-        if settings.max_new_tokens != 0:
-            return
-
-        # set dynamic limit if zero static limit
-        encoded_inputs = tokenizer.encode(dialog[-1], return_tensors='pt')
-        dynamic_token_num = encoded_inputs.size(1)
-        max_new_tokens = dynamic_token_num + settings.dynamic_token_shift
+        max_new_tokens = 0
+        static = settings.max_new_tokens != 0
+        dynamic = settings.dynamic_token_shift != 0
+        if static:
+            max_new_tokens = settings.max_new_tokens
+        elif not static and dynamic:
+            encoded_inputs = tokenizer.encode(dialog[-1], return_tensors='pt')
+            dynamic_token_num = encoded_inputs.size(1)
+            max_new_tokens = dynamic_token_num + settings.dynamic_token_shift
+        else:
+            max_new_tokens = settings.rate_tokens
 
         self.settings.max_new_tokens = max_new_tokens
 
@@ -58,7 +73,7 @@ class TextGenerator():
     def _new_prompt(self, user_prompt: str) -> str:
         """
         Formats new prompt using
-        settings system prompt and provided user prompt,
+        settings' system prompt and provided user prompt,
         based on class defined templates.
         """
         settings = self.settings
@@ -68,16 +83,14 @@ class TextGenerator():
         prompt += self.USER_TEMPLATE.format(user_prompt)
         prompt += self.ASSISTANT_TEMPLATE
 
-        if not "Rate: [number]" in prompt:
+        if "Rate: [number]" not in prompt:
             print(f"Prompt:\n{prompt}")
 
         return prompt
 
 
-    def _generate(self, user_prompt):
-        """
-        Calls new prompt formatting and generates response based on it.
-        """
+    def generate(self, user_prompt):
+        """ Generates response based on user prompt. """
         model = self.model
         tokenizer = self.tokenizer
         settings = self.settings
@@ -120,8 +133,7 @@ class TextGenerator():
 
     def _calc_jaccard_idx(self, str1: str, str2: str) -> float:
         """
-        Calculates Jaccard index to measure similarity
-        between passed strings.
+        Calculates Jaccard index to measure similarity between passed strings.
         """
         jaccard_idx = 0
 
@@ -140,7 +152,7 @@ class TextGenerator():
     def _is_repetitive(self, resp: str) -> tuple[bool, float]:
         """
         Checks if response has repetitions within itself
-        using Jaccard index to check all phrases against each other.
+        using Jaccard index to check all internal phrases against each other.
         """
         jaccard_idx = 0
         phrases = self._split_to_phrases(resp)
@@ -157,7 +169,7 @@ class TextGenerator():
     def _is_repetition(self, resp: str) -> tuple[bool, float]:
         """
         Checks if response has repetitions with other messsages in the dialog
-        using Jaccard index to check all phrases against each other.
+        using Jaccard index to check message phrases against external phrases.
         """
         dialog = self.dialog
 
@@ -177,44 +189,29 @@ class TextGenerator():
         return False, jaccard_idx
 
 
-    def _is_sys_prompt(self, resp: str) -> tuple[bool, float]:
-        """ Checks if response has discloses the system prompt
-        using Jaccard index to response against the system prompt.
+    def check(self, resp: str, msg: str) -> tuple[bool, str]:
         """
-        settings = self.settings
+        Checks if LLM response is web-related, short, repetitive
+        or is repetition of some message in dialog.
+        """
+        msg = ""
 
-        system_prompt = settings.system_prompt
-
-        is_sys_prompt = False
-        jaccard_idx = self._calc_jaccard_idx(resp, system_prompt)
-        if jaccard_idx > 0.1:
-            is_sys_prompt = True
-
-        return is_sys_prompt, jaccard_idx
-
-
-
-    def _check(self, resp: str, msg: str) -> bool:
-        """ Performs all the checks to ensure that response is valid """
-
-        rate_str = r"([Rr]espondo(j)?(n)?\s(de\s.{1,24}\s)?(ne\s)?(\S+as))"
-        is_rate = re.match(rate_str, resp) is not None
         is_web = "[RETEJO]" in resp
         is_short, resp_len, resp_min_len = self._is_short(resp, msg)
         is_repetitive, jaccard_idx_in = self._is_repetitive(resp)
         is_repetition, jaccard_idx_out = self._is_repetition(resp)
-        is_sys_prompt, jaccard_idx_prompt = self._is_sys_prompt(resp)
 
-        print(f"Is rate: {is_rate}")
-        print(f"Is web: {is_web}")
-        print(f"Is short: {is_short} ({resp_len:.2f}) < {resp_min_len:.2f})")
-        print(f"Is repetitive: {is_repetitive} ({jaccard_idx_in:.2f})")
-        print(f"Is repetition: {is_repetition} ({jaccard_idx_out:.2f})")
-        print(f"Is system prompt: {is_sys_prompt} ({jaccard_idx_prompt:.2f})")
+        if is_web:
+            msg += "Web: [RETEJO] in response\n"
+        if is_short:
+            msg += f"Short: ({resp_len:.2f}) < {resp_min_len:.2f})\n"
+        if is_repetitive:
+            msg += f"Repetitive: ({jaccard_idx_in:.2f}) > 0.5\n"
+        if is_repetition:
+            msg += f"Repetition: ({jaccard_idx_out:.2f}) > 0.5\n"
 
-        is_malformed = is_rate or is_web or is_short
-        is_tedious = is_repetitive or is_repetition or is_sys_prompt
+        is_malformed = is_web or is_short
+        is_tedious = is_repetitive or is_repetition
+        is_valid = not (is_malformed or is_tedious)
 
-        is_invalid = not (is_malformed or is_tedious)
-
-        return is_invalid
+        return is_valid, msg

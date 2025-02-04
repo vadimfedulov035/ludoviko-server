@@ -1,19 +1,22 @@
+"""
+This module defines Rater class on top of Generator superclass.
+It relies on superclass initialization.
+It defines self.rate() for external usage.
+"""
+
+
 import re
 
-from text_gen import TextGenerator
+from generator import Generator
 
 
-class Rater(TextGenerator):
+class Rater(Generator):
 
-    def __init__(self, model, tokenizer, settings,
-                 dialog: list[str], responses: list[str]):
-        """
-        Superclass initializes token num based on settings and rate mode.
-        Sets -> dialog: list[str], dialog_str: str.
-        """
-        super().__init__(model, tokenizer, settings, dialog, rate_mode=True)
-        self.responses = responses
-
+    """
+    Rater uses Generator initialize method.
+    Sets -> self.dialog: list[str], self.dialog_str: str
+    self.rate() makes LLM rate responses as last part of dialog.
+    """
 
     def _to_rate(self, resp: str):
         """ Converts response to rate. """
@@ -36,7 +39,7 @@ class Rater(TextGenerator):
         return rate
 
 
-    def _rate_avg(self, response):
+    def _rate_avg(self, resp: str):
         """ Calculates average rate from <rate_num> of rates. """
         rates = []
 
@@ -46,25 +49,26 @@ class Rater(TextGenerator):
         rate_prompt = settings.rate_prompt
         rate_num = settings.rate_num
 
-        user_prompt = rate_prompt.format(dialog_str, response)
+        user_prompt = rate_prompt.format(dialog_str, resp)
         while len(rates) < rate_num:
-            print(f"Rate try:", end=' ')
-            resp = self._generate(user_prompt)
+            resp = self.generate(user_prompt)
             rate = self._to_rate(resp)
             if rate != -1:
                 rates.append(rate)
-                print(f"Success ({rate}/10)")
             else:
-                print(f"Failure {resp}")
+                print(f"Rate failure: {resp}")
         mean_rate = sum(rates) / len(rates)
         return mean_rate
 
 
     def rate(self):
-        """ Calculates average rates for all responses"""
+        """ Calculates average rates for all responses. """
         rates = []
 
         responses = self.responses
+        if responses is None:
+            return rates
+
         for response in responses:
             rate = self._rate_avg(response)
             rates.append(rate)
